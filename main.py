@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 import requests
 import os
 import time
@@ -10,15 +11,25 @@ headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+SKIP_SEEN_PAGE = True
+SKIP_IMAGE = True
+SKIP_VIDEO = True
+
 
 #liste de site a visité
 sites = [
-    ("https://pawolotek.com", ""),
-    ("http://pawolmizik.com", ""),
-    ("https://azmartinique.com/fr/tout-savoir/proverbes-creoles", ""),
-    ("https://www.dictionnaire-creole.com", ''),
-    ("https://www.potomitan.info", '')
+    ("https://pawolotek.com", 1),
+    ("http://pawolmizik.com", 1),
+    ("https://azmartinique.com/fr/tout-savoir/proverbes-creoles", 0),
+    ("https://www.dictionnaire-creole.com", 1),
+    ("https://www.potomitan.info", 1)
 ]
+
+#liste d'entete de link à ignorer
+ignore_headers = {
+    "#",
+    "javascript:"
+}
 
 
 
@@ -38,8 +49,9 @@ def get_folder_name(website_name) :
     return re.sub(r'[<>:"/\\|?*]', '_', website_name)
 
 
+
 # Visiter tous les sites
-for i in range(2,3) :
+for i in range(4,5) :
     # Récupération de l'adresse du site et formatage du nom
     website = sites[i][0]
     folder_name = get_folder_name(website)
@@ -69,13 +81,16 @@ for i in range(2,3) :
     while (sub_pages) :
         time.sleep(0.05)
         # Récupération de la sous-page
+        print("Current adresse : ", sub_pages[0])
+        print("**********************************************************")
         page_to_scrape = requests.get(sub_pages[0], headers={})
         subfolder_name = get_folder_name(sub_pages[0])
         soup = BeautifulSoup(page_to_scrape.text, "html.parser")
 
         #création des dossiers
         os.makedirs(f"sites\\{folder_name}\\{subfolder_name}", exist_ok=True)
-        os.makedirs(f"sites\\{folder_name}\\{subfolder_name}\\imgs", exist_ok=True)
+        if not(SKIP_IMAGE) :
+            os.makedirs(f"sites\\{folder_name}\\{subfolder_name}\\imgs", exist_ok=True)
         os.makedirs(f"sites\\{folder_name}\\{subfolder_name}\\videos", exist_ok=True)
         os.makedirs(f"sites\\{folder_name}\\{subfolder_name}\\others", exist_ok=True)
 
@@ -90,86 +105,100 @@ for i in range(2,3) :
             file.write(html_content)
 
         # ================ Récupération des images ====================================
-        error_dwl_img = ""
-        act_headers = headers
-        for balise_img in soup.findAll("img") :
-            #Récupération de l'image via la balise
-            picHttp = balise_img.get("src")
-            if (picHttp in images_website) :
-                continue
-            else :
-                images_website.append(picHttp)
+        if not(SKIP_IMAGE) :
+            error_dwl_img = ""                               # chaine de sauvegarde des erreurs
+            act_headers = headers
+            for balise_img in soup.findAll("img") :
+                print("Image here")
+                #Récupération de l'image via la balise
+                picHttp = balise_img.get("src")
 
-            try :
-                picReq = requests.get(picHttp, headers=act_headers)
-            except Exception as e:
-                print("Erreur Sur récupération des images :", e)
-                print("nom de la page :",sub_pages[0])
-                print("=========================================")
-                continue
-           
+                #Vérification si l'image a déjà été croisé
+                if (picHttp in images_website) :
+                    continue
+                else :
+                    images_website.append(picHttp)
 
+                #vérification du chemin de l'image s'il est relatifs
+                picHttp = urljoin(website, picHttp)
+
+
+                try :
+                    picReq = requests.get(picHttp, headers=act_headers)
+                except Exception as e:
+                    print("Erreur Sur récupération des images :", e)
+                    print("nom de la page :",sub_pages[0])
+                    print("nom de la page image :",picHttp)
+                    print("=========================================")
+                    error_dwl_img += f"Erreur Sur récupération des images :, {e}\n"
+                    continue
             
-            # Vérifiez si la réponse est correcte et que c'est bien une image
-            if picReq.status_code == 403:
-                error_dwl_img += f"{picHttp} - Erreur: Forbidden\n"
-                continue
+
                 
-            elif 'image' not in picReq.headers.get('Content-Type', ''):
-                error_dwl_img += f"{picHttp} - Ce n'est pas une image\n"
-                continue
-            #si il y'a une erreur on garde l'adresse de l'image
-            elif picReq.status_code == 404 :
-                error_dwl_img += f"{picHttp} - L'adresse n'existe pas \n"
-                continue
-            elif picReq.status_code != 200:
-                error_dwl_img += f"{picHttp} - Erreur: {picReq.status_code}\n"
-                continue
-            
-            #Nom de l'image
-            picName = get_folder_name(picHttp)
+                # Vérifiez si la réponse est correcte et que c'est bien une image
+                if picReq.status_code == 403:
+                    error_dwl_img += f"{picHttp} - Erreur: Forbidden\n"
+                    continue
+                    
+                elif 'image' not in picReq.headers.get('Content-Type', ''):
+                    error_dwl_img += f"{picHttp} - Ce n'est pas une image\n"
+                    continue
+                #si il y'a une erreur on garde l'adresse de l'image
+                elif picReq.status_code == 404 :
+                    error_dwl_img += f"{picHttp} - L'adresse n'existe pas \n"
+                    continue
+                elif picReq.status_code != 200:
+                    error_dwl_img += f"{picHttp} - Erreur: {picReq.status_code}\n"
+                    continue
+                
+                #Nom de l'image
+                picName = get_folder_name(picHttp)
 
-            #Télécharger l'image
-            save_path_img = f"sites\\{folder_name}\\{subfolder_name}\\imgs\\{picName}"
-            if not(os.path.exists(save_path_img)) :
-                    with open(save_path_img, "wb") as f:
-                        f.write(picReq.content)
+                #Télécharger l'image
+                save_path_img = f"sites\\{folder_name}\\{subfolder_name}\\imgs\\{picName}"
+                if not(os.path.exists(save_path_img)) :
+                        with open(save_path_img, "wb") as f:
+                            f.write(picReq.content)
 
-            time.sleep(0.1)
+                time.sleep(0.1)
 
-        #sauvegarde des adresse erronée
-        if error_dwl_img :
-            save_path_error_img = f"sites\\{folder_name}\\{subfolder_name}\\imgs\\error_dwl_img.txt"
-            with open(save_path_error_img, "w") as f:
-                f.write(error_dwl_img)
+            #sauvegarde des adresses erronées
+            if error_dwl_img :
+                save_path_error_img = f"sites\\{folder_name}\\{subfolder_name}\\imgs\\error_dwl_img.txt"
+                with open(save_path_error_img, "w") as f:
+                    f.write(error_dwl_img)
+            print(f"images fini pour {sub_pages[0]}")
 
         # ================ Récupération des vidéos ====================================
-        error_dwl_videos = ""
-        for balise_img in soup.findAll("video") :
-            #Récupération de la vidéo via la balise
-            vidHttp = balise_img.get("src")
+        if not(SKIP_VIDEO) :
+            error_dwl_videos = ""
+            for balise_img in soup.findAll("video") :
+                print("vidéo here")
+                #Récupération de la vidéo via la balise
+                vidHttp = balise_img.get("src")
 
-            # Télécharger la vidéo
-            try:
-                print(f"Téléchargement de la vidéo depuis : {vidHttp}")
-                video_response = requests.get(vidHttp, stream=True)
+                # Télécharger la vidéo
+                try:
+                    print(f"Téléchargement de la vidéo depuis : {vidHttp}")
+                    video_response = requests.get(vidHttp, stream=True)
+                    
+                    # Vérifiez si la requête pour la vidéo a été effectuée avec succès
+                    if video_response.status_code == 200:
+                        # Nom du fichier de sortie
+                        file_name = f"sites\\{folder_name}\\{subfolder_name}\\videos\\{get_folder_name(vidHttp)}"
+                        # Enregistrer la vidéo
+                        with open(file_name, 'wb') as file:
+                            for chunk in video_response.iter_content(chunk_size=8192):
+                                file.write(chunk)
+                        print(f"Vidéo enregistrée sous : {file_name}")
+                    else:
+                        print(f"Erreur lors du téléchargement de la vidéo : {video_response.status_code}")
                 
-                # Vérifiez si la requête pour la vidéo a été effectuée avec succès
-                if video_response.status_code == 200:
-                    # Nom du fichier de sortie
-                    file_name = f"sites\\{folder_name}\\{subfolder_name}\\videos\\{get_folder_name(vidHttp)}"
-                    # Enregistrer la vidéo
-                    with open(file_name, 'wb') as file:
-                        for chunk in video_response.iter_content(chunk_size=8192):
-                            file.write(chunk)
-                    print(f"Vidéo enregistrée sous : {file_name}")
-                else:
-                    print(f"Erreur lors du téléchargement de la vidéo : {video_response.status_code}")
-            
-            except Exception as e:
-                print(f"Erreur lors du téléchargement de la vidéo : {e}")
+                except Exception as e:
+                    print(f"Erreur lors du téléchargement de la vidéo : {e}")
 
-            # break
+                # break
+            print(f"vidéos fini pour {sub_pages[0]}")
 
         # ================ Récupération des vidéos dans le iframs ====================================
         vids_iframe = ""
@@ -183,31 +212,48 @@ for i in range(2,3) :
 
          # ================ Récupération des links ====================================
         sub_pages_already_visited.append(sub_pages[0])
+        temp_sub_page = sub_pages[0]
         del sub_pages[0]
         for link in soup.findAll("a") :
-            time.sleep(0.15)
             link_name = link.get("href")
-            print("link_name :", link_name)
-            print("website :", website)
+            # print("link_name :", link_name)
+            # print("website :", website)
+
+            # lien vide
             if not(link_name) :
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                continue
-            # Ne pas récupérer un chemin déja visité
-            if link_name in sub_pages_already_visited :
-                print("REFUSED link_name in sub_pages_already_visited")
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                continue
-            elif link_name in sub_pages :
-                print("REFUSED link_name in sub_pages")
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                continue
-            # Ne pas sortir du site
-            elif not(website in link_name) :
-                print("REFUSED website in link_name")
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
                 continue
 
-            print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            # vérifier les entêtes
+            ignore = False
+            for ignore_header in ignore_headers :
+                if link_name.startswith(ignore_header) :
+                    ignore = True
+                    break
+            
+            if ignore :
+                continue
+
+            # Joindre les parties urls
+            link_name = urljoin(temp_sub_page, link_name, False)
+
+            # Url a déjà été visité
+            if link_name in sub_pages_already_visited :
+                # print("REFUSED link_name in sub_pages_already_visited")
+                # print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                continue
+            # Url va être visité
+            elif link_name in sub_pages :
+                # print("REFUSED link_name in sub_pages")
+                # print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                continue
+            # Ne pas sortir du site
+            elif not(link_name.startswith(website)) :
+                # print("REFUSED not website in link_name")
+                # print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                continue
+                
+
+            # print("++++++++++++++++++++++++++++++++++++++++++++++++")
 
             sub_pages.append(link_name)
 
